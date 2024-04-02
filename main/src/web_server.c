@@ -41,8 +41,10 @@ extern void storeWifiCredsSTA(char* ssid, char* pass, bool tlm);
 extern void updateLoraSettings(uint32_t freq, uint8_t bw, uint8_t sf, uint8_t cr);
 extern void storeLoraSettings();
 extern void txFT8(const char *message, bool isFreeMessage, bool useOddSlot);
+extern void txChatMsg(const char *message);
 extern void queueTX(const char *message, bool isFreeMessage, bool useOddSlot);
 extern void getMidi(char* _txtarray);
+extern void getLastChatMsg(char* _txtarray);
 
 
 extern const char index_html_start[] asm("_binary_index_html_start");
@@ -335,6 +337,7 @@ static const char ws_json[] = \
 \"filepath\":\"%s\",\
 \"filename\":\"%s\",\
 \"txstatus\":\"%d\",\
+\"rxstatus\":\"%d\",\
 \"tstamp\":\"%s\"}";
 
 /*
@@ -352,6 +355,7 @@ static void ws_async_send(void *arg)
     extern char filename[260];
     extern uint16_t offset;
     extern int tx_status;
+    extern int rx_status;
 
     char* data = heap_caps_malloc(1500, MALLOC_CAP_SPIRAM);
     uint64_t used_space = 0;
@@ -398,6 +402,7 @@ static void ws_async_send(void *arg)
         "path",
         filename,
         tx_status,
+        rx_status,
         tstamp
     );
     memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
@@ -430,6 +435,7 @@ static esp_err_t stats_handler(httpd_req_t *req)
     extern char filename[260];
     extern uint16_t offset;
     extern int tx_status;
+    extern int rx_status;
 
     char* data = heap_caps_malloc(1500, MALLOC_CAP_SPIRAM);
     uint64_t used_space = 0;
@@ -472,10 +478,24 @@ static esp_err_t stats_handler(httpd_req_t *req)
         "path",
         filename,
         tx_status,
+        rx_status,
         tstamp
     );
     
     httpd_resp_sendstr_chunk(req, data);
+
+    /* Respond with an empty chunk to signal HTTP response completion */
+    httpd_resp_send_chunk(req, NULL, 0);
+    return ESP_OK;
+}
+
+static esp_err_t chatmsg_handler(httpd_req_t *req)
+{
+    char* pl = heap_caps_malloc(250, MALLOC_CAP_SPIRAM);
+    ESP_LOGI(TAG, "Trying getLastChatMsg()");
+    getLastChatMsg(pl);
+    ESP_LOGI(TAG, "got Msg! %s", pl);
+    httpd_resp_sendstr_chunk(req, pl);
 
     /* Respond with an empty chunk to signal HTTP response completion */
     httpd_resp_send_chunk(req, NULL, 0);
@@ -561,18 +581,23 @@ static esp_err_t myipjs_handler(httpd_req_t *req)
 {
     extern uint32_t Frequency;
     extern uint32_t txFrequency;
+    extern uint32_t chatFrequency;
+    extern int8_t chatPower;
     extern uint8_t Bandwidth;
     extern uint8_t SpreadingFactor;
     extern uint8_t CodeRate;
+    extern uint8_t ChatBandwidth;
+    extern uint8_t ChatSpreadingFactor;
+    extern uint8_t ChatCodeRate;
     extern uint8_t uLOid;
     extern char myIP[20];
     extern bool bEnableLNB;
     extern bool bEnableLO;
     extern bool bEnableDiseq;
-    char ipjs[256] = {0};
-    sprintf(ipjs, "myip = '%s';\nlet init_freq = %u;\nlet init_txfreq = %u;\nlet init_bw = %d;\nlet init_sf = %d;\nlet init_cr = %d; \
-                \nlet init_lnb = %d;\nlet init_lo = %d;\nlet init_diseq = %d;\nlet init_loid = %d;", 
-                myIP, Frequency, txFrequency, Bandwidth, SpreadingFactor, CodeRate, bEnableLNB, bEnableLO, bEnableDiseq, uLOid);
+    char ipjs[512] = {0};
+    sprintf(ipjs, "myip = '%s';\nlet init_freq = %u;\nlet init_txfreq = %u;\nlet init_chatfreq = %u;\nlet init_bw = %d;\nlet init_sf = %d;\nlet init_cr = %d; \
+                \nlet init_chatbw = %d;\nlet init_chatsf = %d;\nlet init_chatcr = %d;\nlet init_chatpwr = %d;\nlet init_lnb = %d;\nlet init_lo = %d;\nlet init_diseq = %d;\nlet init_loid = %d;", 
+                myIP, Frequency, txFrequency, chatFrequency, Bandwidth, SpreadingFactor, CodeRate, ChatBandwidth, ChatSpreadingFactor, ChatCodeRate, chatPower, bEnableLNB, bEnableLO, bEnableDiseq, uLOid);
     set_content_type_from_file(req, "app.js");
     httpd_resp_send_chunk(req, ipjs, strlen(ipjs));
 
@@ -704,6 +729,41 @@ static esp_err_t synctime_handler(httpd_req_t *req)
 }
 
 /**
+ * Chat TX handler via WEB UI
+ */
+static esp_err_t chattx_handler(httpd_req_t *req)
+{
+    char content[200] = {0};
+
+    /* Truncate if content length larger than the buffer */
+    size_t len = MIN(req->content_len, sizeof(content));
+
+    int ret = httpd_req_recv(req, content, len);
+    if (ret <= 0) {  /* 0 return value indicates connection closed */
+        /* Check if timeout occurred */
+        if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+            httpd_resp_send_408(req);
+        }
+        return ESP_FAIL;
+    }
+
+    char* msg = strstr(content, "msg=");
+    char _msg[200] = {0};
+    int msg_len = strlen(content) - 4;
+    strncpy(_msg, msg + 4, msg_len);
+
+    // set TX Data
+    chatData.message = _msg;
+    chatData.readyToTx = true;
+
+    queueTX(NULL, NULL, NULL);
+
+    /* Respond with an empty chunk to signal HTTP response completion */
+    httpd_resp_send_chunk(req, NULL, 0);
+    return ESP_OK;
+}
+
+/**
  * FT8 TX handler via WEB UI
  */
 static esp_err_t ft8tx_handler(httpd_req_t *req)
@@ -781,6 +841,39 @@ static esp_err_t cwtx_handler(httpd_req_t *req)
 }
 
 /**
+ * Chat rx enable toggle handler via WEB UI
+ */
+static esp_err_t chatenb_handler(httpd_req_t *req)
+{
+    char content[200] = {0};
+
+    /* Truncate if content length larger than the buffer */
+    size_t len = MIN(req->content_len, sizeof(content));
+
+    int ret = httpd_req_recv(req, content, len);
+    if (ret <= 0) {  /* 0 return value indicates connection closed */
+        /* Check if timeout occurred */
+        if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+            httpd_resp_send_408(req);
+        }
+        return ESP_FAIL;
+    }
+
+    char* on = strstr(content, "on=");
+    bool chaton = strncmp(on + 3, "true", 3) == 0;
+
+    chatData.enabled = chaton;
+    // do a test TX with empty msg to enable RX on chat freq
+    chatData.message = "";
+    chatData.readyToTx = true;
+    queueTX(NULL, NULL, NULL);
+
+    /* Respond with an empty chunk to signal HTTP response completion */
+    httpd_resp_send_chunk(req, NULL, 0);
+    return ESP_OK;
+}
+
+/**
  * Save TX Frequency
  */
 static esp_err_t txfreq_handler(httpd_req_t *req)
@@ -804,6 +897,56 @@ static esp_err_t txfreq_handler(httpd_req_t *req)
 
     extern uint32_t txFrequency;
     txFrequency = _freq;
+    storeLoraSettings();
+    //queueTX(NULL, NULL, NULL);
+
+    /* Respond with an empty chunk to signal HTTP response completion */
+    httpd_resp_send_chunk(req, NULL, 0);
+    return ESP_OK;
+}
+
+/**
+ * Save Chat Config
+ */
+static esp_err_t chatconf_handler(httpd_req_t *req)
+{
+    char content[200] = {0};
+
+    /* Truncate if content length larger than the buffer */
+    size_t len = MIN(req->content_len, sizeof(content));
+
+    int ret = httpd_req_recv(req, content, len);
+    if (ret <= 0) {  /* 0 return value indicates connection closed */
+        /* Check if timeout occurred */
+        if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+            httpd_resp_send_408(req);
+        }
+        return ESP_FAIL;
+    }
+
+    char* freq = strstr(content, "freq=");
+    char* bw = strstr(content, "&bw=");
+    char* sf = strstr(content, "sf=");
+    char* cr = strstr(content, "cr=");
+    char* txpwr = strstr(content, "pwr=");
+
+    uint32_t _freq = strtoul( freq + 5, &freq, 0);
+    int _bw = atoi(bw + 4);
+    int _sf = atoi(sf + 3);
+    int _cr = atoi(cr + 3);
+    int _txpwr = atoi(txpwr + 4);
+
+    extern uint32_t chatFrequency;
+    extern int8_t chatPower;
+    extern uint8_t ChatBandwidth;
+    extern uint8_t ChatSpreadingFactor;
+    extern uint8_t ChatCodeRate;
+    chatFrequency = _freq;
+    ChatBandwidth = _bw;
+    ChatSpreadingFactor = _sf;
+    ChatCodeRate = _cr;
+    chatPower = _txpwr;
+    
     storeLoraSettings();
     //queueTX(NULL, NULL, NULL);
 
@@ -856,6 +999,16 @@ static esp_err_t settings_handler(httpd_req_t *req)
     enableLNB();
     //enable22kHz(bDiseq);
     //enableLO(bLO, uLOid);
+    extern uint32_t Frequency;           //frequency of transmissions
+    extern uint8_t Bandwidth;          //LoRa bandwidth
+    extern uint8_t SpreadingFactor;        //LoRa spreading factor
+    extern uint8_t CodeRate;            //LoRa coding rate
+
+    Frequency = _freq;
+    Bandwidth = _bw;
+    SpreadingFactor = _sf;
+    CodeRate = _cr;
+
     updateLoraSettings(_freq, _bw, _sf, _cr);
 
     /* Respond with an empty chunk to signal HTTP response completion */
@@ -1147,6 +1300,14 @@ void web_server()
     };
     httpd_register_uri_handler(server, &synctime);
 
+    httpd_uri_t chattx = {
+        .uri       = "/chattx",
+        .method    = HTTP_POST,
+        .handler   = chattx_handler,
+        .user_ctx  = server_data    // Pass server data as context
+    };
+    httpd_register_uri_handler(server, &chattx);
+
     httpd_uri_t ft8tx = {
         .uri       = "/ft8tx",
         .method    = HTTP_POST,
@@ -1163,6 +1324,14 @@ void web_server()
     };
     httpd_register_uri_handler(server, &cwtx);
 
+    httpd_uri_t chatenb = {
+        .uri       = "/chatenb",
+        .method    = HTTP_POST,
+        .handler   = chatenb_handler,
+        .user_ctx  = server_data    // Pass server data as context
+    };
+    httpd_register_uri_handler(server, &chatenb);
+
     httpd_uri_t txfreq = {
         .uri       = "/txfreq",
         .method    = HTTP_POST,
@@ -1171,6 +1340,14 @@ void web_server()
     };
     httpd_register_uri_handler(server, &txfreq);
 
+    httpd_uri_t chatconf = {
+        .uri       = "/chatconf",
+        .method    = HTTP_POST,
+        .handler   = chatconf_handler,
+        .user_ctx  = server_data    // Pass server data as context
+    };
+    httpd_register_uri_handler(server, &chatconf);
+
     httpd_uri_t stats = {
         .uri       = "/stats",
         .method    = HTTP_GET,
@@ -1178,6 +1355,14 @@ void web_server()
         .user_ctx  = server_data    // Pass server data as context
     };
     httpd_register_uri_handler(server, &stats);
+    
+     httpd_uri_t chatmsg = {
+        .uri       = "/chatmsg",
+        .method    = HTTP_GET,
+        .handler   = chatmsg_handler,
+        .user_ctx  = server_data    // Pass server data as context
+    };
+    httpd_register_uri_handler(server, &chatmsg);
 
     httpd_uri_t format = {
         .uri       = "/format",

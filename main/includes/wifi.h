@@ -28,6 +28,13 @@ struct ft8_data{
 };
 extern struct ft8_data ft8Data;
 
+struct chat_data{
+  bool enabled;
+  const char *message;
+  bool readyToTx;
+};
+extern struct chat_data chatData;
+
 struct cw_data{
   bool enabled;
   int type;

@@ -32,10 +32,15 @@ extern unsigned long resetStart;
 //LoRa Modem Parameters
 extern uint32_t Frequency;           //frequency of transmissions
 extern uint32_t txFrequency;           //frequency of transmissions
+extern uint32_t chatFrequency;           //frequency of chat
+extern int8_t chatPower;           //ty power of chat
 extern int32_t _Offset;                        //offset frequency for calibration purposes  
 extern uint8_t Bandwidth;          //LoRa bandwidth
 extern uint8_t SpreadingFactor;        //LoRa spreading factor
 extern uint8_t CodeRate;            //LoRa coding rate
+extern uint8_t ChatBandwidth;          //LoRa bandwidth
+extern uint8_t ChatSpreadingFactor;        //LoRa spreading factor
+extern uint8_t ChatCodeRate;            //LoRa coding rate
 extern uint8_t PacketLength;
 
 extern bool bEnableTlm;
@@ -69,6 +74,7 @@ void clearLogs();
 void clearTmp();
 
 void txFT8(const char *message, bool isFreeMessage, bool useOddSlot);
+void txChatMsg(const char *message);
 void queueTX(const char *message, bool isFreeMessage, bool useOddSlot);
 
 void loadSettings();

@@ -16,6 +16,7 @@ portMUX_TYPE sxMux;
 extern bool sdCardPresent;
 unsigned int filepacket, filepackets;
 int tx_status = 0;            // TX Status: 0 = Ready, 1 = TX Queued, 2 = TX active
+int rx_status = 0;            // RX Status: 0 = normal, 1 = Chat mode
 char filename[260] = "";
 AsyncUDP udp;
 int32_t offset;
@@ -35,10 +36,15 @@ SPIClass* spi1110;
 
 uint32_t Frequency;
 uint32_t txFrequency;
+uint32_t chatFrequency;
+int8_t chatPower;
 int32_t _Offset = 0;                        //offset frequency for calibration purposes  
 uint8_t Bandwidth;          //LoRa bandwidth
 uint8_t SpreadingFactor;        //LoRa spreading factor
 uint8_t CodeRate;            //LoRa coding rate
+uint8_t ChatBandwidth;          //LoRa bandwidth
+uint8_t ChatSpreadingFactor;        //LoRa spreading factor
+uint8_t ChatCodeRate;            //LoRa coding rate
 
 uint32_t packetsRX = 0;
 uint32_t IRQStatus;
@@ -75,7 +81,13 @@ char* txtarray;
 static SemaphoreHandle_t blink_rx;
 static SemaphoreHandle_t tx_ft8;
 
+char lastChatMsg[200] = "";
+int8_t lastChatMsgSnr = 0;
+int8_t lastChatMsgRssi = 0;
+int32_t lastChatMsgOffset = 0;
+
 struct ft8_data ft8Data;
+struct chat_data chatData;
 struct cw_data cwData;
 
 uint32_t midiNoteToFreq(uint8_t note){
@@ -162,7 +174,8 @@ void txCW()
   {
     Serial.println("txCW function: ON");
     lr11xx_radio_set_rf_freq(&lrRadio, txFrequency);
-    lr11xx_radio_set_tx_cw(&lrRadio);               // Enable TX in CW mode
+    //lr11xx_radio_set_tx_cw(&lrRadio);               // Enable TX in CW mode
+    lr11xx_radio_set_tx_infinite_preamble(&lrRadio);
   } else if (!cwData.enabled && cwData.type == 2) {
     Serial.println("txCW function: OFF");
     lr11xx_radio_set_rx(&lrRadio, 0);
@@ -199,6 +212,7 @@ void txData(void *pvParameter)
     {
         if( xSemaphoreTake( tx_ft8, portMAX_DELAY ) == pdTRUE )
         {
+          Serial.println("TX triggered");
           // if FT8 data is avaliable for TX, start it
           if (ft8Data.readyToTx && tx_status == 0)
           {
@@ -206,6 +220,17 @@ void txData(void *pvParameter)
             tx_status = 1;
             txFT8(ft8Data.message, ft8Data.isFreeMessage, ft8Data.useOddSlot);
             ft8Data.readyToTx = false;
+          }
+          if (chatData.readyToTx && tx_status == 0)
+          {
+            Serial.println("Chat Data ready to TX");
+            Serial.println(chatData.message);
+            Serial.println(chatData.enabled);
+            tx_status = 1;
+            //lrSendData();
+
+            txChatMsg(chatData.message);
+            chatData.readyToTx = false;
           }
           // CW should be enabled
           Serial.println(tx_status);
@@ -229,6 +254,18 @@ extern "C" void getStats(uint16_t* _crc, uint16_t* _header)
 {
   *_crc = crc;
   *_header = header;
+}
+
+extern "C" void getLastChatMsg(char* _txtarray)
+{
+  const char* txt_pre = "{\"type\":\"chat\",\"data\":";
+  const char* txt_template = "[\"%s\",%d,%d,%d]";
+  const char* txt_suf = "}";
+
+  int strlength = 0;
+  strlength += sprintf(_txtarray+strlength, txt_pre);
+  strlength += sprintf(_txtarray+strlength, txt_template, lastChatMsg, lastChatMsgSnr, lastChatMsgRssi, lastChatMsgOffset);
+  strlength += sprintf(_txtarray+strlength, txt_suf);
 }
 
 extern "C" void getMidi(char* _txtarray)
@@ -294,6 +331,7 @@ IRAM_ATTR void busyIRQ()
 void setFrequency(uint32_t freq)
 {
   Serial.println("Setting Freq");
+  Serial.println(freq);
   lr11xx_radio_set_rf_freq(&lrRadio, freq);
 
   // set RF Switches to subGHZ SMA if frequency is under 1.9ghz
@@ -317,7 +355,21 @@ extern "C" void queueTX(const char *message, bool isFreeMessage = false, bool us
   xSemaphoreGive(tx_ft8);
 }
  
+// transmits Chat message over the LR11xx using LoRa
+extern "C" void txChatMsg(const char *message)
+{
+  Serial.println("TX chat MSG trigger");
+  uint8_t msgData[224];
+  msgData[0] = 0x69;
+  memcpy(msgData+4, message, 220);
 
+  // SetTxParams (5)
+  lr11xx_radio_set_tx_params(&lrRadio, chatPower, LR11XX_RADIO_RAMP_48_US);
+
+  setFrequency(chatFrequency);   
+  lr11xx_regmem_write_buffer8(&lrRadio, msgData, 224);
+  lr11xx_radio_set_tx(&lrRadio, 0);
+}
 
 // transmits FT8 over the LR11xx using CW mode and the FT8_lib
 extern "C" void txFT8(const char *message, bool isFreeMessage = false, bool useOddSlot = false)
@@ -497,15 +549,15 @@ void initLR11xx()
 
   // SetPAConfig (4)
   const lr11xx_radio_pa_cfg_t pa_cfg = {
-      .pa_sel = LR11XX_RADIO_PA_SEL_LP,                 //!< Power Amplifier selection
-      .pa_reg_supply = LR11XX_RADIO_PA_REG_SUPPLY_VBAT, //!< Power Amplifier regulator
-      .pa_duty_cycle = 0x04,                            //!< Power Amplifier duty cycle (Default 0x04)
-      .pa_hp_sel = 0x07                                 //!< Number of slices for HPA (Default 0x07)
+    .pa_sel = LR11XX_RADIO_PA_SEL_LP,                 //!< Power Amplifier selection
+    .pa_reg_supply = LR11XX_RADIO_PA_REG_SUPPLY_VBAT, //!< Power Amplifier regulator
+    .pa_duty_cycle = 0x04,                            //!< Power Amplifier duty cycle (Default 0x04)
+    .pa_hp_sel = 0x07                                 //!< Number of slices for HPA (Default 0x07)
   };
   lr11xx_radio_set_pa_cfg(&lrRadio, &pa_cfg);
 
   // SetTxParams (5)
-  lr11xx_radio_set_tx_params(&lrRadio, -10, LR11XX_RADIO_RAMP_48_US);
+  lr11xx_radio_set_tx_params(&lrRadio,14, LR11XX_RADIO_RAMP_48_US);
 
   // Set dio1 irq(6)
   lr11xx_system_set_dio_irq_params(&lrRadio, LR11XX_SYSTEM_IRQ_ALL_MASK | 0x14 | 0x15, 0);
@@ -550,19 +602,23 @@ extern "C" void updateLoraSettings(uint32_t freq, uint8_t bw, uint8_t sf, uint8_
   char *newLogEntry = (char*) heap_caps_malloc(512, MALLOC_CAP_SPIRAM);
   sprintf(newLogEntry,"Updating Radio Settings and restarting it, Uptime: %lus", millis()/1000);
   logToFile(newLogEntry);
+  Serial.println(freq);
+  Serial.println(bw);
+  Serial.println(sf);
+  Serial.println(cr);
   
-  Frequency = freq;
-  SpreadingFactor = sf;
-  Bandwidth = bw;
-  CodeRate = cr;
+  //Frequency = freq;
+  //SpreadingFactor = sf;
+  //Bandwidth = bw;
+  //CodeRate = cr;
   lr11xx_radio_mod_params_lora_t mod_params;
-  mod_params.sf = (lr11xx_radio_lora_sf_t)SpreadingFactor;
-  mod_params.bw = (lr11xx_radio_lora_bw_t)Bandwidth;
-  mod_params.cr = (lr11xx_radio_lora_cr_t)CodeRate;
+  mod_params.sf = (lr11xx_radio_lora_sf_t)sf;
+  mod_params.bw = (lr11xx_radio_lora_bw_t)bw;
+  mod_params.cr = (lr11xx_radio_lora_cr_t)cr;
 
   unsigned long startMillis = micros();
   lr11xx_radio_set_lora_mod_params(&lrRadio, &mod_params);
-  setFrequency(Frequency);          //set Frequency with RF switches in mind
+  setFrequency(freq);          //set Frequency with RF switches in mind
   lr11xx_radio_set_rx(&lrRadio, 0); //start Receiving
 
   storeLoraSettings();
@@ -635,6 +691,21 @@ void rxTaskLR11xx(void* p)
       if(IRQStatus == 0x0) continue;
       if(IRQStatus & LR11XX_SYSTEM_IRQ_TX_DONE){
         Serial.println("TX was done on LR!");
+        // Set Radio back to normal Frequency and stop TX by setting it to RX
+        if (chatData.enabled)
+        {
+          Serial.println("Setting RX to chat lora settings after TX");
+          //setFrequency(chatFrequency);
+          updateLoraSettings(chatFrequency, ChatBandwidth, ChatSpreadingFactor, ChatCodeRate);
+          rx_status = 1;
+        } else {
+          setFrequency(Frequency);
+          rx_status = 0;
+        }
+        
+        lr11xx_radio_set_rx(&lrRadio, 0);
+        tx_status = 0;
+
         gpio_set_level((gpio_num_t)LED_PIN, 1);
         vTaskDelay(50 / portTICK_RATE_MS); // sleep 100ms
         gpio_set_level((gpio_num_t)LED_PIN, 0);
@@ -668,7 +739,7 @@ void rxTaskLR11xx(void* p)
         // to avoid missing packets set radi back to RX before processing
         lr11xx_radio_set_rx( &lrRadio, 0);
 
-        //Serial.printf("RX Buffer (len: %i): \n", RXPacketL);
+        Serial.printf("RX Buffer (len: %i): \n", RXPacketL);
         //Serial.println((char*)data);
 
         //udp.writeTo(data, RXPacketL, IPAddress(192,168,0,174), 8280);
@@ -709,14 +780,19 @@ void rxTaskLR11xx(void* p)
             //delay(tmpmidi.duration*1000+tmpmidi.start);
           }
         }
-        //0x69 = Test/Chat Packet for Factory Testing
-        if(data[2] == 0x69){
-          Serial.println("--- Got a Test Packet ---");
-          Serial.println((char*)data+4);
+        //0x69 = Test/Chat Packet
+        if(data[0] == 0x69){
+          Serial.println("--- Got a Chat Packet ---");
+          memcpy(lastChatMsg, data+4, 200);
+          lastChatMsgSnr = PacketSNR;
+          lastChatMsgRssi = PacketRSSI;
+          lastChatMsgOffset = offset;
+          Serial.println("Got Message Pkt:");
+          Serial.println(lastChatMsg);
         }
       
         if(RXPacketL > 0) {
-          //Serial.printf("RX Payload Size: %02x %02x %02x %02x %02x %02x %02x %02x\n", data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7]);
+          Serial.printf("RX Payload Size: %02x %02x %02x %02x %02x %02x %02x %02x\n", data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7]);
           //Serial.println("Consume data check");
           if (!isFormatting) {            // stop consuming data during sd card formatting to not access card
             if (!sdCardPresent)
@@ -725,7 +801,7 @@ void rxTaskLR11xx(void* p)
                 //data_carousel.consume(data, RXPacketL);
               //portEXIT_CRITICAL(&sxMux);
             } else {
-              //Serial.println("consume Data");
+              Serial.println("consume Data");
               data_carousel.consume(data, RXPacketL);
             }
           }

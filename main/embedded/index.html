@@ -5,6 +5,29 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>Dreamcatcher | Othernet</title>
         <link rel="stylesheet" href="app.css">
+        <style>
+            /* ===== Scrollbar CSS ===== */
+            /* Firefox */
+            * {
+                scrollbar-width: auto;
+                scrollbar-color: #02838f #1b1b1b;
+            }
+
+            /* Chrome, Edge, and Safari */
+            *::-webkit-scrollbar {
+                width: 16px;
+            }
+
+            *::-webkit-scrollbar-track {
+                background: #1b1b1b;
+            }
+
+            *::-webkit-scrollbar-thumb {
+                background-color: #02838f;
+                border-radius: 10px;
+                border: 3px none #ffffff;
+            }
+        </style>
         <script src="tone.js"></script>
         <script src="app.js"></script>
         <script src="myip.js"></script>
@@ -32,6 +55,7 @@
                 <a id="nav_wifi" onclick="toggleTab(this.id,'','.tabs_main','main_wifi')"class="navbar-item">Wifi</a>
                 <a id="nav_rx" onclick="toggleTab(this.id,'','.tabs_main','main_receive')"class="navbar-item">Receive</a>
                 <a id="nav_tx" onclick="toggleTab(this.id,'','.tabs_main','main_transmit')"class="navbar-item">Transmit</a>
+                <a id="nav_chat" onclick="toggleTab(this.id,'','.tabs_main','main_chat')"class="navbar-item">Chat</a>
                 
                 <!--
                 <div class="navbar-item has-dropdown is-hoverable">
@@ -279,6 +303,143 @@
                         <span id="md_filetree_status" class="is-pulled-right"></span>
                     </div>                    
                     <div id="messages"></div>
+                </div>
+            </section>
+
+        </div>
+
+        <div id="main_chat" class="tabs_main" style="display: none; min-height: calc(100vh - 5rem);">
+            <section class="hero is-primary is-bold"> 
+                <div class="hero-body">
+                    <div class="container">
+                        <h1 class="title">
+                            Chat
+                        </h1>
+                        <p class="subtitle">
+                            Send messages to other Dreamcatcher devices near you (if you have amateur radio license!)
+                        </p>
+                    </div>
+                </div>
+            </section>
+
+            <section class="section pb-0">
+                <div id="chatContainer" class="container px-4" style="height: 50vh; overflow-y: auto;"></div>
+            </section>
+
+            <section class="section pt-0">
+                <div class="container">
+                    <div class="columns is-multiline">
+                        <div class="column is-full">
+                            <h3 class="subtitle has-text-grey has-text-weight-semibold"></h3>
+                            <div class="field is-grouped pt-4">
+                                <div class="control is-expanded">
+                                    <input id="chat_msg" class="input " type="text" maxlength="200" placeholder="type your message...">
+                                </div>
+                                <div class="control">
+                                    <button id="btn_txchat" onclick="postTxChat()" class="button is-link">Send</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="column is-half">
+                            <div class="notification p-4">
+                                <h3 class="subtitle has-text-grey has-text-weight-semibold">Chat Settings<span id="tag_saveChatConfig" class="tag is-success is-pulled-right is-hidden">Saved</span></h3>
+                                <div class="columns">
+                                    <div class="column is-half">
+                                        <div class="field">
+                                            <div class="control">
+                                                <input id="chat_freq" class="input" type="text" placeholder="2400000000">
+                                            </div>
+                                        </div>
+                                        <div class="field is-flex pt-2 is-justify-content-space-between">
+                                            <button onclick="setChatRemoveTick()" class="button is-dark">-10 kHz</button>
+                                            <button onclick="setChatAddTick()" class="button is-dark">+10 kHz</button>
+                                        </div>
+                                        
+                                        <p><small id="stats_chat" class="has-text-grey">-</small></p>
+                                        <br>
+                                        <div class="field">
+                                            <label class="label">TX Power (dbm)</label>
+                                            <p class="is-size-7">Valid values: -10 to 14</p>
+                                            <br>
+                                            <div class="control">
+                                                <input id="chat_txpwr" class="input" type="text" placeholder="0">
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="column pl-6">
+                                        <div class="field">
+                                            <label class="label">Bandwidth</label>
+                                            <div class="control">
+                                                <div class="select">
+                                                    <select id="chat_bw">
+                                                        <option value="13">LORA_BW_0200</option>
+                                                        <option value="14">LORA_BW_0400</option>
+                                                        <option value="15">LORA_BW_0800</option>
+                                                    </select>
+                                                </div>
+                                            </div>
+                                        </div>
+                    
+                                        <div class="field">
+                                            <label class="label">Spreading factor</label>
+                                            <div class="control">
+                                                <div class="select">
+                                                    <select id="chat_sf">
+                                                        <option value="5">LORA_SF5</option>
+                                                        <option value="6">LORA_SF6</option>
+                                                        <option value="7">LORA_SF7</option>
+                                                        <option value="8">LORA_SF8</option>
+                                                        <option value="9">LORA_SF9</option>
+                                                        <option value="10">LORA_SF10</option>
+                                                        <option value="11">LORA_SF11</option>
+                                                        <option value="12">LORA_SF12</option>
+                                                    </select>
+                                                </div>
+                                            </div>
+                                        </div>
+                    
+                                        <div class="field">
+                                            <label class="label">Coding rate</label>
+                                            <div class="control">
+                                                <div class="select">
+                                                    <select id="chat_cr">
+                                                        <option value="1">LORA_CR_4_5</option>
+                                                        <option value="2">LORA_CR_4_6</option>
+                                                        <option value="3">LORA_CR_4_7</option>
+                                                        <option value="4">LORA_CR_4_8</option>
+                                                    </select>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                    </div>
+                                </div>
+                                <div class="field is-grouped pt-4">
+                                    <div class="control">
+                                        <button onclick="saveChatConfig()" class="button is-link">Save Settings</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        
+
+                        <div class="column is-one-quarter">
+                            <div class="notification p-4">
+                                <h3 class="subtitle has-text-grey has-text-weight-semibold">Chat Reception</h3>
+                                <p class="is-size-7">Use the Toggle Chat Reception to start and stop the Chat software. If chat is active, broadcast reception will be paused and the Dreamcatcher will use the chat frequency and settings to listen for chat messages.</p>
+                                <br>
+                                <p><span id="tag_RxStatus" class="tag is-info is-light is-medium">-</span></p>
+                                <br>
+                                <button id="btn_startchat" onclick="toggleChat()" class="button is-link">Toggle Chat Reception</button>
+
+                            </div>
+                        </div>
+
+                       
+                    </div>
                 </div>
             </section>
 

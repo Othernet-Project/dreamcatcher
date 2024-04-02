@@ -7,10 +7,13 @@ let wsHandle;
 let plays = false;
 let midiTimeout;
 let lastMidiBuf;
+let lastChatMsg = "";
 
 let synth
 let txStatus = 0
+let rxStatus = 0
 let cwEnabled = false
+let chatEnabled = false
 
 function createSynth() {
     synth = new Tone.PolySynth(Tone.Synth, {
@@ -345,17 +348,34 @@ function updateStats(jsnStats) {
         case 0:
             document.getElementById('tag_TxStatus').innerText = "TX Ready"
             document.getElementById('btn_txft8').classList.remove('is-loading')
-            document.getElementById('btn_txft8').disabled = false 
+            document.getElementById('btn_txft8').disabled = false
+            document.getElementById('btn_txchat').classList.remove('is-loading')
+            document.getElementById('btn_txchat').disabled = false 
             break;
         case 1:
             document.getElementById('tag_TxStatus').innerText = "TX Queued"
             document.getElementById('btn_txft8').classList.add('is-loading')
-            document.getElementById('btn_txft8').disabled = true 
+            document.getElementById('btn_txft8').disabled = true
+            document.getElementById('btn_txchat').classList.add('is-loading')
+            document.getElementById('btn_txchat').disabled = true
             break;
         case 2:
             document.getElementById('tag_TxStatus').innerText = "TX Active"
             document.getElementById('btn_txft8').classList.add('is-loading')
             document.getElementById('btn_txft8').disabled = true 
+            document.getElementById('btn_txchat').classList.add('is-loading')
+            document.getElementById('btn_txchat').disabled = true
+            break;
+    }
+
+    // set rx status on UI
+    rxStatus = jsnStats.rxstatus
+    switch (parseInt(jsnStats.rxstatus)) {
+        case 0:
+            document.getElementById('tag_RxStatus').innerText = "Broadcast Reception"
+            break;
+        case 1:
+            document.getElementById('tag_RxStatus').innerText = "Chat Reception"
             break;
     }
 
@@ -388,6 +408,16 @@ function setTxAddTick() {
 function setTxRemoveTick() {
     var freq = parseInt(document.getElementById('tx_freq').value);
     document.getElementById('tx_freq').value = freq - 10000;
+}
+
+function setChatAddTick() {
+    var freq = parseInt(document.getElementById('chat_freq').value);
+    document.getElementById('chat_freq').value = freq + 10000;
+}
+
+function setChatRemoveTick() {
+    var freq = parseInt(document.getElementById('chat_freq').value);
+    document.getElementById('chat_freq').value = freq - 10000;
 }
 
 function receiverAddAndSaveTick() {
@@ -453,6 +483,33 @@ function saveTxFreq() {
             // update other UI elements that use Receiver data
             document.getElementById('tag_saveTxFreq').classList.remove('is-hidden');
             setTimeout(function(){ document.getElementById('tag_saveTxFreq').classList.add('is-hidden'); }, 5000);
+        }
+    }
+    http.send(params);
+}
+
+// save Chat Frequency
+function saveChatConfig() {
+    let freq = document.getElementById('chat_freq').value;
+    let bw = document.getElementById('chat_bw').value;
+    let sf = document.getElementById('chat_sf').value;
+    let cr = document.getElementById('chat_cr').value;
+    let txpwr = document.getElementById('chat_txpwr').value;
+
+    const http = new XMLHttpRequest();
+    var params = 'freq=' + freq + '&bw=' + bw + '&sf=' + sf + '&cr=' + cr + '&pwr=' + txpwr
+    console.log(params);
+    var url = '/chatconf';
+    http.open("POST", url, true);
+    // Send the proper header information along with the request
+    http.setRequestHeader('Content-type', 'application/x-www-form-urlencoded');
+
+    http.onreadystatechange = function() {//Call a function when the state changes.
+        if(http.readyState == 4 && http.status == 200) {
+            console.log('Chat Frequency set ', http.responseText);
+            // update other UI elements that use Receiver data
+            document.getElementById('tag_saveChatConfig').classList.remove('is-hidden');
+            setTimeout(function(){ document.getElementById('tag_saveChatConfig').classList.add('is-hidden'); }, 5000);
         }
     }
     http.send(params);
@@ -545,6 +602,79 @@ function toggleCW(toneType = 2) {
         }
     }
     http.send(params);
+
+    return true;
+}
+
+// toggle Chat RX
+function toggleChat() {
+    const http = new XMLHttpRequest();
+
+    chatEnabled = !chatEnabled
+
+    var params = 'on=' + chatEnabled
+
+    var url = '/chatenb';
+    http.open("POST", url, true);
+    // Send the proper header information along with the request
+    http.setRequestHeader('Content-type', 'application/x-www-form-urlencoded');
+
+    http.onreadystatechange = function() {//Call a function when the state changes.
+        if(http.readyState == 4 && http.status == 200) {
+            console.log('chat toggle done', http.responseText);
+            return true;
+        }
+    }
+    http.send(params);
+
+    return true;
+}
+
+function addChatMessage(chatMsgData){
+    if(chatMsgData[0] != lastChatMsg){
+        lastChatMsg = chatMsgData[0];
+
+        var msg = chatMsgData[0];
+        var snr = chatMsgData[1];
+        var rssi = chatMsgData[2];
+
+        document.getElementById('chatContainer').innerHTML += `<div class="is-clearfix pb-4">
+        <div class="notification p-4 is-pulled-left">
+            <p class="pb-2">${msg}</p>
+            <p class="is-size-7 is-bold has-text-grey has-text-weight-bold">SNR: ${snr} | RSSI: ${rssi}</p>
+        </div>
+    </div>`;
+    }
+}
+
+// tx Chat message via Dreamcatcher with settings from UI
+function postTxChat() {
+    const http = new XMLHttpRequest();
+
+    console.log("Chat TX initiated...")
+    document.getElementById('btn_txchat').classList.add('is-loading');
+
+    let msg = document.getElementById('chat_msg').value;
+    var params = 'msg=' + msg;
+    console.log(params);
+
+    var url = '/chattx';
+    http.open("POST", url, true);
+    // Send the proper header information along with the request
+    http.setRequestHeader('Content-type', 'application/x-www-form-urlencoded');
+
+    http.onreadystatechange = function() {//Call a function when the state changes.
+        if(http.readyState == 4 && http.status == 200) {
+            console.log('chattx done', http.responseText);
+            return true;
+        }
+    }
+    http.send(params);
+
+    document.getElementById('btn_txchat').disabled = true;
+    
+    document.getElementById('chat_msg').value = '';
+    document.getElementById('chatContainer').innerHTML += `<div class="is-clearfix pb-4"><div class="notification p-4 is-primary is-pulled-right">${msg}</div></div>`;
 
     return true;
 }
@@ -861,6 +991,14 @@ function getStats() {
     setTimeout(function(){ getStats() }, 1000)
 }
 
+// Requests newest chat message from Backend
+function getChatMsg() {
+    console.log("get Chatmessage")
+    let chatData = JSON.parse(synchronousRequest('/chatmsg'))
+    addChatMessage(chatData.data);
+    setTimeout(function(){ getChatMsg() }, 1000)
+}
+
 // events of keypresses on keyboard
 document.addEventListener("keyup", function(event) {
 
@@ -885,6 +1023,14 @@ document.addEventListener('DOMContentLoaded', event => {
     getfilestree('/files')
     getMessages()
     getStats()
+    getChatMsg()
+
+    document.getElementById('chat_msg').onkeydown = function(e){
+        if(e.key == 'Enter'){
+          console.log("Submit Chat");
+          postTxChat()
+        }
+     };
 
     document.getElementById('info_ip').innerText = myip;
     try {        
@@ -901,6 +1047,13 @@ document.addEventListener('DOMContentLoaded', event => {
         document.getElementById('stats_lora').innerText = 'BW ' + getHumanReadableBW(init_bw) + ' - SF ' + init_sf + ' - CR ' + getHumanReadableCR(init_cr);
 
         document.getElementById('tx_freq').value = init_txfreq;
+        
+        document.getElementById('chat_freq').value = init_chatfreq;
+        document.getElementById('chat_bw').value = init_chatbw;
+        document.getElementById('chat_sf').value = init_chatsf;
+        document.getElementById('chat_cr').value = init_chatcr;
+        document.getElementById('chat_txpwr').value = init_chatpwr;
+        document.getElementById('stats_chat').innerText = 'BW ' + getHumanReadableBW(init_chatbw) + ' - SF ' + init_chatsf + ' - CR ' + getHumanReadableCR(init_chatcr);
     } catch (error) {}
 
     document.getElementById('volume').addEventListener("input", function (e) {

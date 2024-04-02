@@ -25,9 +25,14 @@ void loadSettings()
   // LoRa settings
   Frequency = prefs.getUInt("freq", DEFAULT_FREQUENCY);
   txFrequency = prefs.getUInt("txfreq", DEFAULT_TXFREQUENCY);
+  chatFrequency = prefs.getUInt("chatfreq", DEFAULT_CHATFREQUENCY);
+  chatPower = prefs.getInt("chatpwr", DEFAULT_CHATPWR);
   Bandwidth = prefs.getUChar("bw", DEFAULT_BW);
   SpreadingFactor = prefs.getUChar("sf", DEFAULT_SF);
   CodeRate = prefs.getUChar("cr", DEFAULT_CR);
+  ChatBandwidth = prefs.getUChar("chatbw", DEFAULT_BW);
+  ChatSpreadingFactor = prefs.getUChar("chatsf", DEFAULT_SF);
+  ChatCodeRate = prefs.getUChar("chatcr", DEFAULT_CR);
   bEnableLNB = prefs.getBool("lnb", true);
   uLOid = prefs.getUChar("loid", 0);
   bEnableLO = prefs.getBool("lo", false);
@@ -78,9 +83,14 @@ extern "C" void storeLoraSettings()
   prefs.begin("lora", false);
   prefs.putUInt("freq", Frequency);
   prefs.putUInt("txfreq", txFrequency);
+  prefs.putUInt("chatfreq", chatFrequency);
+  prefs.putInt("chatpwr", chatPower);
   prefs.putUChar("bw", Bandwidth);
   prefs.putUChar("sf", SpreadingFactor);
   prefs.putUChar("cr", CodeRate);
+  prefs.putUChar("chatbw", ChatBandwidth);
+  prefs.putUChar("chatsf", ChatSpreadingFactor);
+  prefs.putUChar("chatcr", ChatCodeRate);
   prefs.putBool("lnb", bEnableLNB);
   prefs.putBool("lo", bEnableLO);
   prefs.putUChar("loid", uLOid);
